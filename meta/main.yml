@@ -1,6 +1,7 @@
 ---
 galaxy_info:
   author: spatterlight
+  namespace: mash
   role_name: headplane
   description: An Ansible role for installing Headplane, a feature-complete Web UI for Headscale
   platforms:
