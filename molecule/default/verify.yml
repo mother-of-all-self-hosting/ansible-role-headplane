@@ -1,13 +1,24 @@
+# SPDX-FileCopyrightText: 2026 Slavi Pantaleev
 # SPDX-FileCopyrightText: 2026 spatterlight
 #
 # SPDX-License-Identifier: AGPL-3.0-or-later
 
 ---
-- name: Verify Headplane systemd service
+- name: Verify Headplane
   hosts: all
   become: true
   gather_facts: false
+  vars:
+    headplane_molecule_base_url: "http://127.0.0.1:{{ headplane_molecule_bind_port }}"
+    headplane_molecule_labels_path: "{{ headplane_base_path }}/labels"
   tasks:
+    # Role defaults are not in scope here, but the version that Renovate bumps
+    # lives in them and is what the running container is checked against below.
+    - name: Load the Headplane role defaults
+      ansible.builtin.include_vars:
+        file: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/defaults/main.yml"
+        name: headplane_defaults
+
     - name: Wait for Headplane service to become active (up to 180s)
       ansible.builtin.systemd:
         name: headplane.service
@@ -15,7 +26,11 @@
       until: headplane_service.status.ActiveState == 'active'
       retries: 36
       delay: 5
+      failed_when: false
 
+    # Worth very little on its own: the unit is `Restart=always`, so a
+    # crash-looping container also reports `active`. It is here to fail early
+    # and point at the right place when the unit never comes up at all.
     - name: Assert Headplane service is active
       ansible.builtin.assert:
         that: headplane_service.status.ActiveState == 'active'
@@ -28,25 +43,229 @@
         cmd: journalctl -xeu headplane.service
       changed_when: false
 
-    - name: Wait for Headplane HTTP endpoint to respond (up to 10m)
+    # `/admin/healthz` is the endpoint the image's own healthcheck uses, and
+    # Headplane only answers it with a 200 once it has reached Headscale. With
+    # Headscale absent it answers 500 `{"status":"ERROR"}` while still serving
+    # everything else - `/admin` redirects with a 302 either way, which is why
+    # a probe of the web UI alone cannot tell the two apart.
+    #
+    # The port is also load-bearing: 3080 only becomes Headplane's listening
+    # port by way of `server.port` in the configuration file this role renders,
+    # and 39080 only reaches it through the port publishing in the systemd unit.
+    - name: Wait for the Headplane health endpoint to pass (up to 300s)
       ansible.builtin.uri:
-        url: "http://localhost:3000/admin"
+        url: "{{ headplane_molecule_base_url }}/admin/healthz"
         method: GET
-        status_code: [200, 302]
-        follow_redirects: none
-      register: headplane_endpoint
-      until: headplane_endpoint.status in [200, 302]
-      retries: 120
+        status_code: [200, 500]
+        return_content: true
+      register: headplane_healthz
+      until: headplane_healthz.status == 200
+      retries: 60
       delay: 5
+      failed_when: false
 
-    - name: Assert Headplane HTTP endpoint responds
+    - name: Assert the Headplane health endpoint reports Headscale is reachable
       ansible.builtin.assert:
-        that: headplane_endpoint.status in [200, 302]
-        fail_msg: "Headplane did not respond as expected ({{ headplane_endpoint.status | default('no response') }})"
-        success_msg: "Headplane responded with {{ headplane_endpoint.status }}"
+        that:
+          - headplane_healthz.status == 200
+          - (headplane_healthz.content | from_json).status == 'OK'
+        fail_msg: >-
+          Headplane did not report a healthy Headscale connection
+          (HTTP {{ headplane_healthz.status | default('no response') }}, {{ headplane_healthz.content | default('no body') }})
+        success_msg: "Headplane reports a healthy Headscale connection"
 
-    - name: Show Headplane systemd service status summary
+    - name: Inspect the Headplane container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - headplane
+      register: headplane_inspect_result
+      changed_when: false
+
+    - name: Determine the Headplane container details
+      ansible.builtin.set_fact:
+        headplane_container: "{{ (headplane_inspect_result.stdout | from_json)[0] }}"
+
+    # The image's OCI metadata, read off the container that is actually
+    # running, rather than the tag the systemd unit asked for. Headplane does
+    # not report its own version over HTTP or in its logs, so this is the only
+    # surface that ties the running process back to the literal that Renovate
+    # bumps.
+    - name: Assert the running Headplane is the version this role installs
+      vars:
+        headplane_molecule_reported_version: "{{ headplane_container.Config.Labels['org.opencontainers.image.version'] }}"
+      ansible.builtin.assert:
+        that: headplane_molecule_reported_version == headplane_defaults.headplane_version | string
+        fail_msg: "The running container reports Headplane {{ headplane_molecule_reported_version }}, expected {{ headplane_defaults.headplane_version }}"
+        success_msg: "The running container reports Headplane {{ headplane_molecule_reported_version }}"
+
+    # The image writes the address it ended up listening on into
+    # `/tmp/headplane-listen` and its healthcheck binary reads it back. With
+    # the container's root filesystem read-only and no writable /tmp, that
+    # write fails with EROFS, the healthcheck falls back to localhost:3000 and
+    # the container stays unhealthy forever. Reaching `healthy` therefore
+    # proves both the tmpfs and that Headplane listens where the role said.
+    - name: Wait for the Headplane container to become healthy (up to 300s)
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - --format
+          - "{% raw %}{{ .State.Health.Status }}{% endraw %}"
+          - headplane
+      register: headplane_health_result
+      until: headplane_health_result.stdout | trim == 'healthy'
+      retries: 60
+      delay: 5
+      changed_when: false
+      failed_when: false
+
+    - name: Assert the Headplane container healthcheck passes
+      ansible.builtin.assert:
+        that: headplane_health_result.stdout | trim == 'healthy'
+        fail_msg: "The Headplane container is {{ headplane_health_result.stdout | trim | default('unknown', true) }}, expected healthy"
+        success_msg: "The Headplane container healthcheck passes"
+
+    - name: Inspect the Headscale container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - headscale
+      register: headscale_inspect_result
+      changed_when: false
+
+    # The journal keeps the output of every earlier start of the unit, so a
+    # plain `journalctl --unit` would happily match a line that the currently
+    # running Headplane never logged - which would make every assertion below
+    # unfalsifiable on a re-converge. Reading the invocation identifier first
+    # narrows the log to the run that is being verified.
+    - name: Determine the current Headplane service invocation
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - show
+          - --property=InvocationID
+          - --value
+          - headplane.service
+      register: headplane_invocation
+      changed_when: false
+
+    - name: Assert the Headplane service reports an invocation identifier
+      ansible.builtin.assert:
+        that: headplane_invocation.stdout | trim | length > 0
+        fail_msg: "headplane.service has no InvocationID, so its log cannot be isolated"
+        success_msg: "headplane.service invocation is {{ headplane_invocation.stdout | trim }}"
+
+    - name: Retrieve the log of the current Headplane service invocation
+      ansible.builtin.command:
+        argv:
+          - journalctl
+          - --no-pager
+          - "_SYSTEMD_INVOCATION_ID={{ headplane_invocation.stdout | trim }}"
+      register: headplane_journal
+      changed_when: false
+
+    # Headplane asks Headscale for its version over HTTP on startup and logs
+    # what came back. Cross-checked against the image tag the Headscale role
+    # deployed, so this only holds when the two containers really talked.
+    - name: Assert Headplane connected to the Headscale this scenario deployed
+      vars:
+        headscale_molecule_image_version: "{{ (headscale_inspect_result.stdout | from_json)[0].Config.Image | regex_replace('^.*:', '') | regex_replace('^v', '') }}"
+      ansible.builtin.assert:
+        that: "'Connected to Headscale ' ~ headscale_molecule_image_version in headplane_journal.stdout"
+        fail_msg: "Headplane did not report connecting to Headscale {{ headscale_molecule_image_version }}"
+        success_msg: "Headplane reports connecting to Headscale {{ headscale_molecule_image_version }}"
+
+    # `headplane_headscale_config_path` makes the systemd unit bind-mount the
+    # Headscale role's own configuration file into the container. Headplane
+    # parses it and says so; with the mount missing it logs "No Headscale
+    # configuration file was provided" instead.
+    - name: Assert Headplane read the Headscale configuration file
+      ansible.builtin.assert:
+        that: "'Found a valid Headscale configuration file at /etc/headscale/config.yaml' in headplane_journal.stdout"
+        fail_msg: "Headplane did not pick up the mounted Headscale configuration file"
+        success_msg: "Headplane read the mounted Headscale configuration file"
+
+    # `headplane_debugging_enabled` is the only thing this scenario puts into
+    # the role's environment file, and it is the only reason Headplane emits
+    # debug-level lines at all.
+    - name: Assert the role's environment file reaches the Headplane process
+      ansible.builtin.assert:
+        that: "'\"level\":\"debug\"' in headplane_journal.stdout"
+        fail_msg: "Headplane logged no debug lines, so HEADPLANE_DEBUG_LOG did not reach it"
+        success_msg: "Headplane logs debug lines, so the environment file reaches it"
+
+    - name: Assert the additional container volume is mounted read-only
+      vars:
+        headplane_molecule_extra_mount: "{{ headplane_container.Mounts | selectattr('Destination', 'equalto', '/opt/molecule-extra') | list }}"
+      ansible.builtin.assert:
+        that:
+          - headplane_molecule_extra_mount | length == 1
+          - headplane_molecule_extra_mount[0].Source == headplane_molecule_extra_volume_host_path
+          - not headplane_molecule_extra_mount[0].RW
+        fail_msg: "headplane_container_additional_volumes did not become a read-only bind mount: {{ headplane_container.Mounts }}"
+        success_msg: "headplane_container_additional_volumes became a read-only bind mount"
+
+    - name: Assert the extra container arguments reach the container
+      ansible.builtin.assert:
+        that: "'HEADPLANE_MOLECULE_EXTRA_ARGUMENT=present' in headplane_container.Config.Env"
+        fail_msg: "headplane_container_extra_arguments did not reach the container: {{ headplane_container.Config.Env }}"
+        success_msg: "headplane_container_extra_arguments reach the container"
+
+    # Headplane creates this SQLite database itself on first start. The host
+    # path is taken from the container's own mount table rather than from the
+    # role's variables, so that the file being there means it was written
+    # through the data volume that this container actually has.
+    - name: Determine the host path of the Headplane data volume
+      vars:
+        headplane_molecule_data_mount: "{{ headplane_container.Mounts | selectattr('Destination', 'equalto', '/var/lib/headplane') | list }}"
+      ansible.builtin.set_fact:
+        headplane_molecule_data_host_path: "{{ (headplane_molecule_data_mount | first).Source | default('', true) }}"
+
+    - name: Assert the Headplane data volume is mounted
+      ansible.builtin.assert:
+        that: headplane_molecule_data_host_path | length > 0
+        fail_msg: "The container has no bind mount at /var/lib/headplane: {{ headplane_container.Mounts }}"
+        success_msg: "The Headplane data volume is mounted from {{ headplane_molecule_data_host_path }}"
+
+    - name: Stat the Headplane persistence database
+      ansible.builtin.stat:
+        path: "{{ headplane_molecule_data_host_path }}/hp_persist.db"
+      register: headplane_persist_db
+
+    - name: Assert Headplane persists data into the mounted data path
+      ansible.builtin.assert:
+        that:
+          - headplane_persist_db.stat.exists
+          - headplane_persist_db.stat.size > 0
+        fail_msg: "Headplane did not create {{ headplane_molecule_data_host_path }}/hp_persist.db"
+        success_msg: "Headplane persists data into {{ headplane_molecule_data_host_path }}/hp_persist.db"
+
+    # This scenario runs with `headplane_container_labels_traefik_enabled`
+    # false. Every Traefik label the role emits has to be behind that switch -
+    # the `/admin` redirect labels once were not, and got attached to the
+    # container even with Traefik turned off.
+    - name: Read the rendered container label file
+      ansible.builtin.slurp:
+        src: "{{ headplane_molecule_labels_path }}"
+      register: headplane_labels_file
+
+    - name: Assert no Traefik labels are emitted while Traefik is disabled
+      vars:
+        headplane_molecule_traefik_labels: >-
+          {{ (headplane_labels_file.content | b64decode).splitlines() | select('match', '^traefik[.]') | list }}
+      ansible.builtin.assert:
+        that: headplane_molecule_traefik_labels | length == 0
+        fail_msg: "Traefik labels were emitted with Traefik disabled: {{ headplane_molecule_traefik_labels }}"
+        success_msg: "No Traefik labels are emitted while Traefik is disabled"
+
+    - name: Show Headplane verification summary
       ansible.builtin.debug:
         msg:
           - "Headplane systemd: {{ headplane_service.status.ActiveState }}"
-          - "Headplane HTTP: {{ headplane_endpoint.status }}"
+          - "Headplane version: {{ headplane_container.Config.Labels['org.opencontainers.image.version'] }}"
+          - "Headplane healthz: HTTP {{ headplane_healthz.status }} {{ headplane_healthz.content }}"
+          - "Headplane container health: {{ headplane_health_result.stdout | trim }}"
+          - "Headplane data: {{ headplane_molecule_data_host_path }}/hp_persist.db ({{ headplane_persist_db.stat.size }} bytes)"
