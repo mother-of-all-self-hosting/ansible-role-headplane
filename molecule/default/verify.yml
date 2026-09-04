@@ -262,7 +262,7 @@
         fail_msg: "Traefik labels were emitted with Traefik disabled: {{ headplane_molecule_traefik_labels }}"
         success_msg: "No Traefik labels are emitted while Traefik is disabled"
 
-    - name: Show Headplane verification summary
+    - name: Show the Headplane verification summary
       ansible.builtin.debug:
         msg:
           - "Headplane systemd: {{ headplane_service.status.ActiveState }}"
