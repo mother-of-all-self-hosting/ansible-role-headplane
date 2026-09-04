@@ -12,9 +12,10 @@
     headplane_molecule_base_url: "http://127.0.0.1:{{ headplane_molecule_bind_port }}"
     headplane_molecule_labels_path: "{{ headplane_base_path }}/labels"
   tasks:
-    # Role defaults are not in scope here, but the version that Renovate bumps
-    # lives in them and is what the running container is checked against below.
-    - name: Load the Headplane role defaults
+    # The role is not included in this playbook, so its defaults are not in
+    # scope. Reading defaults/main.yml directly ties the version assertion
+    # below.
+    - name: Load the role defaults
       ansible.builtin.include_vars:
         file: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/defaults/main.yml"
         name: headplane_defaults
