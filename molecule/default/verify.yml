@@ -81,7 +81,7 @@
       changed_when: false
       register: headplane_inspect_result
 
-    - name: Read the Headplane container's configuration
+    - name: Parse the Headplane container's configuration
       ansible.builtin.set_fact:
         headplane_container: "{{ (headplane_inspect_result.stdout | from_json)[0] }}"
 
