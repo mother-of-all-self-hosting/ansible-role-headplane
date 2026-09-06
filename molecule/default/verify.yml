@@ -77,29 +77,19 @@
 
     - name: Inspect the Headplane container
       ansible.builtin.command:
-        argv:
-          - docker
-          - inspect
-          - headplane
-      register: headplane_inspect_result
+        cmd: "docker container inspect {{ headplane_defaults.headplane_identifier }}"
       changed_when: false
+      register: headplane_inspect_result
 
-    - name: Determine the Headplane container details
+    - name: Read the Headplane container's configuration
       ansible.builtin.set_fact:
         headplane_container: "{{ (headplane_inspect_result.stdout | from_json)[0] }}"
 
-    # The image's OCI metadata, read off the container that is actually
-    # running, rather than the tag the systemd unit asked for. Headplane does
-    # not report its own version over HTTP or in its logs, so this is the only
-    # surface that ties the running process back to the literal that Renovate
-    # bumps.
     - name: Assert the running Headplane is the version this role installs
-      vars:
-        headplane_molecule_reported_version: "{{ headplane_container.Config.Labels['org.opencontainers.image.version'] }}"
       ansible.builtin.assert:
-        that: headplane_molecule_reported_version == headplane_defaults.headplane_version | string
-        fail_msg: "The running container reports Headplane {{ headplane_molecule_reported_version | default('none') }}, expected {{ headplane_defaults.headplane_version }}"
-        success_msg: "The running container reports Headplane {{ headplane_molecule_reported_version }}"
+        that: headplane_container.Config.Labels['org.opencontainers.image.version'] == headplane_defaults.headplane_version | string
+        fail_msg: "Headplane reports {{ headplane_container.Config.Labels['org.opencontainers.image.version'] | default('none') }}, expected {{ headplane_defaults.headplane_version }}"
+        success_msg: "Headplane reports {{ headplane_container.Config.Labels['org.opencontainers.image.version'] }}"
 
     # The image writes the address it ended up listening on into
     # `/tmp/headplane-listen` and its healthcheck binary reads it back. With
