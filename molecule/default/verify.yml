@@ -20,8 +20,8 @@
         file: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/defaults/main.yml"
         name: headplane_defaults
 
-    - name: Wait for Headplane service to become active (up to 180s)
-      ansible.builtin.systemd:
+    - name: Wait for the Headplane systemd service to become active (up to 180s)
+      ansible.builtin.systemd_service:
         name: headplane.service
       register: headplane_service
       until: headplane_service.status.ActiveState == 'active'
@@ -29,16 +29,16 @@
       delay: 5
       failed_when: false
 
-    # Worth very little on its own: the unit is `Restart=always`, so a
-    # crash-looping container also reports `active`. It is here to fail early
-    # and point at the right place when the unit never comes up at all.
-    - name: Assert Headplane service is active
+    # `Restart=always` in the systemd unit means that even a container which crashes
+    # and gets restarted reads as active here, so this is a precondition rather than
+    # a result.
+    - name: Assert the Headplane systemd service is active
       ansible.builtin.assert:
         that: headplane_service.status.ActiveState == 'active'
-        fail_msg: "headplane.service not active ({{ headplane_service.status.ActiveState }})"
+        fail_msg: "headplane.service is not active ({{ headplane_service.status.ActiveState }})"
         success_msg: "headplane.service is active"
 
-    - name: Retrieve Headplane service log for debugging
+    - name: Retrieve the Headplane systemd service log for debugging
       when: headplane_debug_service_enabled | bool
       ansible.builtin.command:
         cmd: journalctl -xeu headplane.service
