@@ -99,12 +99,7 @@
     # proves both the tmpfs and that Headplane listens where the role said.
     - name: Wait for the Headplane container to become healthy (up to 300s)
       ansible.builtin.command:
-        argv:
-          - docker
-          - inspect
-          - --format
-          - "{% raw %}{{ .State.Health.Status }}{% endraw %}"
-          - headplane
+        cmd: docker inspect --format {% raw %}{{ .State.Health.Status }}{% endraw %} headplane
       register: headplane_health_result
       until: headplane_health_result.stdout | trim == 'healthy'
       retries: 60
@@ -120,10 +115,7 @@
 
     - name: Inspect the Headscale container
       ansible.builtin.command:
-        argv:
-          - docker
-          - inspect
-          - headscale
+        cmd: docker inspect headscale
       register: headscale_inspect_result
       changed_when: false
 
@@ -151,10 +143,7 @@
 
     - name: Retrieve the log of the current Headplane service invocation
       ansible.builtin.command:
-        argv:
-          - journalctl
-          - --no-pager
-          - "_SYSTEMD_INVOCATION_ID={{ headplane_invocation.stdout | trim }}"
+        cmd: "journalctl --no-pager _SYSTEMD_INVOCATION_ID={{ headplane_invocation.stdout | trim }}"
       register: headplane_journal
       changed_when: false
 
