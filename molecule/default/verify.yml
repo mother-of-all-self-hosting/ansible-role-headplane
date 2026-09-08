@@ -41,7 +41,7 @@
     - name: Retrieve the Headplane systemd service log for debugging
       when: headplane_debug_service_enabled | bool
       ansible.builtin.command:
-        cmd: journalctl -xeu headplane.service
+        cmd: journalctl --no-pager --output=cat --unit=headplane.service
       changed_when: false
 
     # `/admin/healthz` is the endpoint the image's own healthcheck uses, and
