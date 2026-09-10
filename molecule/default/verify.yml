@@ -99,9 +99,17 @@
         # write fails with EROFS, the healthcheck falls back to localhost:3000 and
         # the container stays unhealthy forever. Reaching `healthy` therefore
         # proves both the tmpfs and that Headplane listens where the role said.
+        #
+        # `argv` rather than `cmd`, because a Go template holding a space would
+        # otherwise be split into separate arguments and Docker would reject it.
         - name: Wait for the Headplane container to become healthy (up to 300s)
           ansible.builtin.command:
-            cmd: docker inspect --format {% raw %}{{ .State.Health.Status }}{% endraw %} headplane
+            argv:
+              - docker
+              - inspect
+              - --format
+              - "{% raw %}{{ .State.Health.Status }}{% endraw %}"
+              - headplane
           register: headplane_health_result
           until: headplane_health_result.stdout | trim == 'healthy'
           retries: 60
