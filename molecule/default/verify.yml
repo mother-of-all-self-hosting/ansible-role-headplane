@@ -8,9 +8,15 @@
   hosts: all
   become: true
   gather_facts: false
+
   vars:
     headplane_molecule_base_url: "http://127.0.0.1:{{ headplane_molecule_bind_port }}"
     headplane_molecule_labels_path: "{{ headplane_base_path }}/labels"
+
+    headplane_verify_units:
+      - headplane.service
+      - headscale.service
+
   tasks:
     - name: Verify that Headplane works
       block:
@@ -22,29 +28,35 @@
             file: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/defaults/main.yml"
             name: headplane_defaults
 
-        - name: Wait for the Headplane systemd service to become active (up to 180s)
+        - name: Wait for the Headplane systemd services to become active (up to 180s each)
           ansible.builtin.systemd_service:
-            name: headplane.service
-          register: headplane_service
-          until: headplane_service.status.ActiveState == 'active'
+            name: "{{ item }}"
+          register: headplane_services
+          until: headplane_services.status.ActiveState == 'active'
           retries: 36
           delay: 5
+          loop: "{{ headplane_verify_units }}"
+          # So that giving up is reported by the assertion below rather than as a
+          # wall of systemd unit properties.
           failed_when: false
 
         # `Restart=always` in the systemd unit means that even a container which crashes
         # and gets restarted reads as active here, so this is a precondition rather than
         # a result.
-        - name: Assert the Headplane systemd service is active
+        - name: Assert the Headplane systemd services are active
           ansible.builtin.assert:
-            that: headplane_service.status.ActiveState == 'active'
-            fail_msg: "headplane.service is not active ({{ headplane_service.status.ActiveState }})"
-            success_msg: "headplane.service is active"
+            that: headplane_services.results | map(attribute='status.ActiveState') | unique | list == ['active']
+            fail_msg: >-
+              Not every service is active:
+              {{ dict(headplane_verify_units | zip(headplane_services.results | map(attribute='status.ActiveState'))) }}
+            success_msg: "Every systemd service is active"
 
-        - name: Retrieve the Headplane systemd service log for debugging
+        - name: Retrieve the Headplane systemd services log for debugging
           when: headplane_debug_service_enabled | bool
           ansible.builtin.command:
-            cmd: journalctl --no-pager --output=cat --unit=headplane.service
+            cmd: "journalctl --no-pager --output=cat --unit={{ item }}"
           changed_when: false
+          loop: "{{ headplane_verify_units }}"
 
         # `/admin/healthz` is the endpoint the image's own healthcheck uses, and
         # Headplane only answers it with a 200 once it has reached Headscale. With
@@ -254,7 +266,7 @@
         - name: Show the Headplane verification summary
           ansible.builtin.debug:
             msg:
-              - "Headplane systemd: {{ headplane_service.status.ActiveState }}"
+              - "Headplane systemd: {% for unit, state in headplane_verify_units | zip(headplane_services.results | map(attribute='status.ActiveState')) %}{{ unit }} ({{ state }}){% if not loop.last %}, {% endif %}{% endfor %}"
               - "Headplane version: {{ headplane_container.Config.Labels['org.opencontainers.image.version'] }}"
               - "Headplane healthz: HTTP {{ headplane_healthz.status }} {{ headplane_healthz.content }}"
               - "Headplane container health: {{ headplane_health_result.stdout | trim }}"
