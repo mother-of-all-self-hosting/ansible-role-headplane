@@ -91,7 +91,7 @@
 
         - name: Inspect the Headplane container
           ansible.builtin.command:
-            cmd: "docker container inspect {{ headplane_defaults.headplane_identifier }}"
+            cmd: docker container inspect headplane
           changed_when: false
           register: headplane_inspect_result
 
