@@ -67,27 +67,25 @@
         # The port is also load-bearing: 3080 only becomes Headplane's listening
         # port by way of `server.port` in the configuration file this role renders,
         # and 39080 only reaches it through the port publishing in the systemd unit.
-        - name: Wait for the Headplane health endpoint to pass (up to 300s)
+        - name: Wait for Headplane to report itself healthy (up to 180s)
           ansible.builtin.uri:
             url: "{{ headplane_molecule_base_url }}/admin/healthz"
             method: GET
             status_code: [200, 500]
             return_content: true
-          register: headplane_healthz
-          until: headplane_healthz.status == 200
-          retries: 60
+          register: headplane_health
+          until: headplane_health.status == 200 and (headplane_health.content | from_json).status == 'OK'
+          retries: 36
           delay: 5
+          # So that giving up is reported by the assertion below rather than as a
+          # wall of systemd unit properties.
           failed_when: false
 
-        - name: Assert the Headplane health endpoint reports Headscale is reachable
+        - name: Assert Headplane reports itself healthy
           ansible.builtin.assert:
-            that:
-              - headplane_healthz.status == 200
-              - (headplane_healthz.content | from_json).status == 'OK'
-            fail_msg: >-
-              Headplane did not report a healthy Headscale connection
-              (HTTP {{ headplane_healthz.status | default('no response') }}, {{ headplane_healthz.content | default('no body') }})
-            success_msg: "Headplane reports a healthy Headscale connection"
+            that: (headplane_health.content | from_json).status == 'OK'
+            fail_msg: "Headplane did not report itself healthy: {{ (headplane_health.content | from_json).status | default('no response') }}"
+            success_msg: "Headplane reports itself healthy"
 
         - name: Inspect the Headplane container
           ansible.builtin.command:
@@ -268,7 +266,7 @@
             msg:
               - "Headplane systemd: {% for unit, state in headplane_verify_units | zip(headplane_services.results | map(attribute='status.ActiveState')) %}{{ unit }} ({{ state }}){% if not loop.last %}, {% endif %}{% endfor %}"
               - "Headplane version: {{ headplane_container.Config.Labels['org.opencontainers.image.version'] }}"
-              - "Headplane healthz: HTTP {{ headplane_healthz.status }} {{ headplane_healthz.content }}"
+              - "Headplane healthz: HTTP {{ headplane_health.status }} {{ headplane_health.content }}"
               - "Headplane container health: {{ headplane_health_result.stdout | trim }}"
               - "Headplane data: {{ headplane_molecule_data_host_path }}/hp_persist.db ({{ headplane_persist_db.stat.size }} bytes)"
 
