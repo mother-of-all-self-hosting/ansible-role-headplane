@@ -5,7 +5,7 @@ roles:
     version: 8.0.0
     name: ansible-role-docker
   - src: git+https://github.com/mother-of-all-self-hosting/ansible-role-headscale.git
-    version: v0.29.3-5
+    version: v0.29.4-0
     name: ansible-role-headscale
   - src: git+https://github.com/devture/com.devture.ansible.role.playbook_help.git
     version: main
