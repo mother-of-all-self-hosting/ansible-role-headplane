@@ -92,11 +92,11 @@
           ansible.builtin.command:
             cmd: docker container inspect headplane
           changed_when: false
-          register: headplane_inspect_result
+          register: headplane_container_raw
 
         - name: Parse the Headplane container's configuration
           ansible.builtin.set_fact:
-            headplane_container: "{{ (headplane_inspect_result.stdout | from_json)[0] }}"
+            headplane_container: "{{ (headplane_container_raw.stdout | from_json)[0] }}"
 
         - name: Assert the running Headplane is the version this role installs
           ansible.builtin.assert:
@@ -137,7 +137,7 @@
         - name: Inspect the Headscale container
           ansible.builtin.command:
             cmd: docker inspect headscale
-          register: headscale_inspect_result
+          register: headscale_container_raw
           changed_when: false
 
         # The journal keeps the output of every earlier start of the unit, so a
@@ -173,7 +173,7 @@
         # deployed, so this only holds when the two containers really talked.
         - name: Assert Headplane connected to the Headscale this scenario deployed
           vars:
-            headscale_molecule_image_version: "{{ (headscale_inspect_result.stdout | from_json)[0].Config.Image | regex_replace('^.*:', '') | regex_replace('^v', '') }}"
+            headscale_molecule_image_version: "{{ (headscale_container_raw.stdout | from_json)[0].Config.Image | regex_replace('^.*:', '') | regex_replace('^v', '') }}"
           ansible.builtin.assert:
             that: "'Connected to Headscale ' ~ headscale_molecule_image_version in headplane_journal.stdout"
             fail_msg: "Headplane did not report connecting to Headscale {{ headscale_molecule_image_version }}"
