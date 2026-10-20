@@ -88,6 +88,9 @@ headplane_container_labels_traefik_priority: 0
 headplane_container_labels_traefik_entrypoints: web-secure
 headplane_container_labels_traefik_tls: "{{ headplane_container_labels_traefik_entrypoints != 'web' }}"
 headplane_container_labels_traefik_tls_certResolver: default  # noqa var-naming
+headplane_container_labels_traefik_middleware_basic_auth_enabled: false
+# See: https://doc.traefik.io/traefik/reference/routing-configuration/http/middlewares/basicauth/
+headplane_container_labels_traefik_middleware_basic_auth_users: ""
 
 # Controls the addition of a set of Traefik labels
 # which automatically redirect to /admin when `headplane_path_prefix` is '/'
