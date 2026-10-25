@@ -84,7 +84,7 @@ headplane_config_integration_agent_enabled: true
 headplane_config_headscale_api_key: YOUR_HEADSCALE_API_KEY_HERE
 ```
 
-The agent requires a Headscale API key. If Headplane already uses one, you can reuse the key. Otherwise, you can create one by running the command from [Headscale's API documentation](https://headscale.net/stable/ref/api/) with the [Headscale convenience script](https://github.com/mother-of-all-self-hosting/mash-playbook/blob/main/docs/services/headscale.md#convenience-script-to-call-the-binary) (adapt the path to the binary as necessary):
+The agent requires a Headscale API key. If Headplane already uses one, you can reuse the key. Otherwise, you can create one by running the command from [Headscale's API documentation](https://headscale.net/stable/ref/api/) with the [Headscale convenience script](https://github.com/mother-of-all-self-hosting/ansible-role-headscale/blob/main/docs/configuring-headscale.md#convenience-script-to-call-the-binary) (adapt the path to the binary as necessary):
 
 ```sh
 /mash/headscale/bin/headscale apikeys create
