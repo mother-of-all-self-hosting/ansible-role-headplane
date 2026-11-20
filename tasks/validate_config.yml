@@ -30,7 +30,6 @@
   with_items:
     - headplane_uid
     - headplane_gid
-    - headplane_hostname
     - headplane_cookie_secret
     - headplane_headscale_hostname
     - headplane_headscale_port
