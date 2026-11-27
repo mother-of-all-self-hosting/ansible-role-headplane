@@ -55,7 +55,7 @@
       failed_when: false
 
     - name: Ensure Headplane container network does not exist
-      when: headplane_container_network_deletion_enabled
+      when: headplane_container_network_deletion_enabled and headplane_container_network != 'host'
       block:
         - name: Ensure Headplane container network does not exist via community.docker.docker_network
           when: devture_systemd_docker_base_container_network_creation_method == 'ansible-module'
